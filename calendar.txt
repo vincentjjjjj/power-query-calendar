@@ -1,0 +1,42 @@
+// META Vacances Scolaires
+let
+    Source = Csv.Document(Web.Contents("https://www.data.gouv.fr/fr/datasets/r/9957d723-346e-4317-8cb3-293c94e19b2d"),[Delimiter=";", Columns=7, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+    #"En-têtes promus" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+    #"Type modifié" = Table.TransformColumnTypes(#"En-têtes promus",{{"description", type text}, {"population", type text}, {"start_date", type datetimezone}, {"end_date", type datetimezone}, {"location", type text}, {"zones", type text}, {"annee_scolaire", type text}}),
+    #"Filtre Réunion" = Table.SelectRows(#"Type modifié", each ([location] = "Réunion")),
+    #"Date Type Int64" = Table.TransformColumnTypes(#"Filtre Réunion",{{"start_date", Int64.Type}, {"end_date", Int64.Type}}),
+    #"Séquence Date" = Table.AddColumn(#"Date Type Int64", "Date", each {[start_date]..[end_date]}),
+    #"Date développé" = Table.ExpandListColumn(#"Séquence Date", "Date"),
+    #"Date Type date" = Table.TransformColumnTypes(#"Date développé",{{"Date", type date}}),
+    #"Doublons supprimés" = Table.Distinct(#"Date Type date", {"Date"}),
+    Date = Table.SelectColumns(#"Doublons supprimés",{"Date"}),
+    #"Periode scolaire" = Table.AddColumn(Date, "Periode scolaire", each "Vacances", type text)
+in
+    #"Periode scolaire"
+
+// META Calendrier
+let
+    Source = List.Dates(#date(2021, 1, 1), 10 * 365, #duration(1, 0, 0, 0)),
+    #"Converti en table" = Table.FromList(Source, Splitter.SplitByNothing(), {"Date"}, null, ExtraValues.Error),
+    #"Type modifié" = Table.TransformColumnTypes(#"Converti en table",{{"Date", type date}}),
+    Aujourdhui = Table.AddColumn(#"Type modifié", "Aujourdhui", each Date.From(DateTime.LocalNow()), type date),
+    #"Filtrer jusqu'à aujourd'hui" = Table.SelectRows(Aujourdhui, each [Date] <= [Aujourdhui]),
+    #"Numéro année-mois" = Table.AddColumn(#"Filtrer jusqu'à aujourd'hui", "Numéro année-mois", each Date.Year([Date]) * 100 + Date.Month([Date]), Int64.Type),
+    Année = Table.AddColumn(#"Numéro année-mois", "Année", each Date.Year([Date]), Int64.Type),
+    #"Numéro du mois" = Table.AddColumn(Année, "Numéro du mois", each Date.Month([Date]), Int64.Type),
+    #"Numéro du jour" = Table.AddColumn(#"Numéro du mois", "Numéro du jour", each Date.DayOfWeek([Date]) + 1, Int64.Type),
+    #"Début du mois" = Table.AddColumn(#"Numéro du jour", "Début du mois", each Date.StartOfMonth([Date]), type date),
+    Mois = Table.AddColumn(#"Début du mois", "Mois", each Text.Proper(Date.MonthName([Date])), type text),
+    Jour = Table.AddColumn(Mois, "Jour", each Date.DayOfWeekName([Date]), type text),
+    #"Jour Type (LMJV-SD)" = Table.AddColumn(Jour, "Jour Type (LMJV-SD)", each if [Numéro du jour] >= 6 then "SD" else if [Numéro du jour] = 3 then "M" else "LMJV", type text),
+    #"Jour Type (LMJV-S-D)" = Table.AddColumn(#"Jour Type (LMJV-SD)", "Jour Type (LMJV-S-D)", each if [Numéro du jour] = 3 then "Mercredi" else if [Numéro du jour] = 6 then "Samedi" else if [Numéro du jour] = 7 then "Dimanche" else "LMJV", type text),
+    #"Jour Type (Lundi à Vendredi)" = Table.AddColumn(#"Jour Type (LMJV-S-D)", "Jour Type (Lundi à Vendredi)", each if [Numéro du jour] >= 6 then "Samedi et Dimanche" else "Lundi à Vendredi", type text),
+    #"Différence mois par rapport aujd" = Table.AddColumn(#"Jour Type (Lundi à Vendredi)", "Soustraction Mois", each Number.IntegerDivide(Duration.Days([Début du mois] - [Aujourdhui]), 30), Int64.Type),
+    #"Différence année par rapport aujd" = Table.AddColumn(#"Différence mois par rapport aujd", "Soustraction Annee", each [Année] - Date.Year([Aujourdhui]), Int64.Type),
+    #"Type Mois" = Table.AddColumn(#"Différence année par rapport aujd", "Type Mois", each if [Soustraction Mois] = -12 then "Mois N-12" else if [Soustraction Mois] = 0 then "Ce mois-ci" else if [Soustraction Mois] = -1 then "Mois précédent" else null, type text),
+    #"Type Annee" = Table.AddColumn(#"Type Mois", "Type Annee", each if [Soustraction Annee] = -1 then "Année dernière" else if [Soustraction Annee] = 0 then "Cette année" else null, type text),
+    #"META Vacances Scolaires" = Table.NestedJoin(#"Type Annee", {"Date"}, #"META Vacances Scolaires", {"Date"}, "META Vacances Scolaires", JoinKind.LeftOuter),
+    #"META Vacances Scolaires développé" = Table.ExpandTableColumn(#"META Vacances Scolaires", "META Vacances Scolaires", {"Periode scolaire"}, {"Periode scolaire"}),
+    Scolaire = Table.ReplaceValue(#"META Vacances Scolaires développé",null,"Scolaire",Replacer.ReplaceValue,{"Periode scolaire"})
+in
+    Scolaire
